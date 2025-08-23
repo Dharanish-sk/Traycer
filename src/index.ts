@@ -6,7 +6,7 @@ import path from "path";
 import chalk from "chalk";
 
 dotenv.config();
-
+ 
 interface Task {
   id: string;
   title: string;
@@ -18,13 +18,13 @@ interface Task {
   priority: 'low' | 'medium' | 'high';
   code?: string;
 }
-// Add this near your other interfaces (Task, Plan, etc.)
+
 interface VerificationResult {
   score: number;
   passed: boolean;
-  issues: string[];
-  suggestions: string[];
-  strengths: string[];
+  issues?: string[];
+  suggestions?: string[];
+  strengths?: string[];
   analysis: string;
 }
 
@@ -35,12 +35,12 @@ interface Plan {
   tasks: Task[];
   created: Date;
   updated: Date;
-  status: 'draft' | 'approved' | 'executing' | 'completed';
+  status: 'draft' | 'approved' | 'executing' | 'completed' | 'failed';
 }
 
 class TracerLite {
   private genAI: GoogleGenerativeAI;
-  private gemini: any;
+  private model: any;
   private rl: readline.Interface;
   private currentPlan: Plan | null = null;
   private projectPath: string;
@@ -52,7 +52,7 @@ class TracerLite {
     }
 
     this.genAI = new GoogleGenerativeAI(process.env.GEMINI_KEY);
-    this.gemini = this.genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+    this.model = this.genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
     this.rl = readline.createInterface({
       input: process.stdin,
       output: process.stdout,
@@ -62,11 +62,29 @@ class TracerLite {
 
   private async askGemini(prompt: string): Promise<string> {
     try {
-      const result = await this.gemini.generateContent(prompt);
+      const result = await this.model.generateContent(prompt);
       return result.response.text();
     } catch (error) {
       console.error(chalk.red("Error calling Gemini API:"), error);
       return "";
+    }
+  }
+
+  // New method to ask Gemini for a JSON-formatted response
+  private async askGeminiWithJson<T>(prompt: string): Promise<T | null> {
+    try {
+      const model = this.genAI.getGenerativeModel({
+        model: "gemini-1.5-flash",
+        generationConfig: {
+          responseMimeType: "application/json",
+        },
+      });
+      const result = await model.generateContent(prompt);
+      const jsonResponse = JSON.parse(result.response.text());
+      return jsonResponse as T;
+    } catch (error) {
+      console.error(chalk.red("Error generating or parsing JSON from Gemini:"), error);
+      return null;
     }
   }
 
@@ -75,7 +93,7 @@ class TracerLite {
       const files = await this.getProjectFiles();
       let codebaseContext = "=== CODEBASE ANALYSIS ===\n";
       
-      for (const file of files.slice(0, 10)) { // Limit to first 10 files
+      for (const file of files.slice(0, 10)) {
         try {
           const content = await fs.readFile(file, 'utf-8');
           const relativePath = path.relative(this.projectPath, file);
@@ -308,23 +326,17 @@ Examples of VALID requirements:
     const isValid = validation.toLowerCase().includes("valid:");
     
     if (!isValid) {
-      // Extract the feedback from the INVALID response
       const feedbackMatch = validation.match(/INVALID:\s*(.+)/i);
       if (feedbackMatch) {
         console.log(chalk.yellow("\n💡 Here's what needs improvement:"));
         console.log(chalk.yellow(`   ${feedbackMatch[1]}`));
-        
-        // Provide helpful suggestions
         this.showImprovementSuggestions(requirements);
       }
     } else {
-      // Extract the positive feedback
       const feedbackMatch = validation.match(/VALID:\s*(.+)/i);
       if (feedbackMatch) {
         console.log(chalk.green(`   ${feedbackMatch[1]}`));
       }
-      
-      // Show final confirmation
       const confirmed = await this.confirmRequirements(requirements);
       return confirmed;
     }
@@ -335,7 +347,6 @@ Examples of VALID requirements:
   private showImprovementSuggestions(requirements: string): void {
     console.log(chalk.blue("\n📝 Suggestions to improve your requirements:"));
     
-    // Analyze what's missing and provide targeted suggestions
     const wordCount = requirements.split(/\s+/).length;
     const hasFeatures = /feature|function|allow|enable|support/i.test(requirements);
     const hasTech = /react|node|python|javascript|typescript|api|database/i.test(requirements);
@@ -387,7 +398,6 @@ Examples of VALID requirements:
         } else if (input === 'edit') {
           const editedRequirements = await this.editRequirements(requirements);
           if (editedRequirements) {
-            // Update the requirements and validate again
             resolve(await this.validateRequirements(editedRequirements));
           } else {
             resolve(false);
@@ -404,7 +414,6 @@ Examples of VALID requirements:
       console.log(chalk.blue("\n✏️ Edit your requirements:"));
       console.log(chalk.gray("Current requirements will be pre-filled. Make your changes and type 'done'.\n"));
       
-      // Pre-fill with current requirements
       let editedRequirements = currentRequirements;
       console.log(chalk.gray("Current text:"));
       console.log(chalk.white(currentRequirements));
@@ -477,7 +486,6 @@ Make the plan actionable and specific. Each task should be clear enough that a c
     const planResponse = await this.askGemini(planningPrompt);
     
     try {
-      // Extract JSON from response (in case there's extra text)
       const jsonMatch = planResponse.match(/\{[\s\S]*\}/);
       const planData = JSON.parse(jsonMatch ? jsonMatch[0] : planResponse);
       
@@ -503,7 +511,6 @@ Make the plan actionable and specific. Each task should be clear enough that a c
       return plan;
     } catch (error) {
       console.error(chalk.red("Error parsing plan response"), error);
-      // Fallback plan
       return {
         id: `plan-${Date.now()}`,
         title: "Manual Implementation Plan",
@@ -550,9 +557,6 @@ Make the plan actionable and specific. Each task should be clear enough that a c
       }
     });
   }
-   
-
-  
 
   private async reviewAndIteratePlan(plan: Plan): Promise<Plan> {
     this.displayPlan(plan);
@@ -572,6 +576,7 @@ Make the plan actionable and specific. Each task should be clear enough that a c
         switch (choice.trim()) {
           case '1':
             plan.status = 'approved';
+            await this.executePlan(plan);
             resolve(plan);
             break;
           case '2':
@@ -722,11 +727,32 @@ Return a JSON object with this structure:
       console.error(chalk.red("Error exporting plan:"), error);
     }
   }
-  // Add this method to your TracerLite class
 
-private async executeTaskWithGemini(task: Task): Promise<boolean> {
-  try {
-    const executionPrompt = `
+  private async executePlan(plan: Plan): Promise<void> {
+    console.log(chalk.cyan(`\n🚀 Starting execution of plan: ${plan.title}`));
+    plan.status = 'executing';
+
+    for (const task of plan.tasks) {
+        if (task.status === 'pending') {
+            console.log(chalk.yellow(`\n- Executing task: ${task.title}`));
+            const success = await this.executeTaskWithGemini(task);
+            if (success) {
+                console.log(chalk.green(`✅ Task "${task.title}" completed successfully.`));
+            } else {
+                console.log(chalk.red(`❌ Task "${task.title}" failed. Halting execution.`));
+                plan.status = 'failed';
+                return;
+            }
+        }
+    }
+
+    console.log(chalk.green(`\n🎉 Plan execution completed successfully!`));
+    plan.status = 'completed';
+  }
+
+  private async executeTaskWithGemini(task: Task): Promise<boolean> {
+    try {
+      const executionPrompt = `
 You are an expert TypeScript developer. Implement this specific task with high-quality, production-ready code.
 
 TASK: ${task.title}
@@ -744,537 +770,171 @@ REQUIREMENTS:
 
 Please provide the complete implementation for this task.
 `;
-
-    console.log(chalk.blue(`\n🔄 Generating code with Gemini for: ${task.title}...`));
-    
-    const response = await this.gemini.generateContent(executionPrompt);
-    const generatedCode = response.response.text();
-    
-    console.log(chalk.green('\n📝 Generated code:'));
-    console.log(chalk.gray('═'.repeat(60)));
-    console.log(generatedCode);
-    console.log(chalk.gray('═'.repeat(60)));
-
-    // Run verification
-    const verificationResult = await this.verifyTaskImplementation(task, generatedCode);
-    
-    if (verificationResult.passed) {
-      console.log(chalk.green(`✅ Task verification passed! Score: ${verificationResult.score}/10`));
-      task.status = 'completed';
-      return true;
-    } else {
-      console.log(chalk.red(`❌ Task verification failed! Score: ${verificationResult.score}/10`));
-      console.log(chalk.yellow('\n⚠️ Issues:'));
-      verificationResult.issues.forEach(issue => {
-        console.log(chalk.yellow(`   - ${issue}`));
-      });
+      console.log(chalk.blue(`\n🔄 Generating code with Gemini for: ${task.title}...`));
       
-      console.log(chalk.blue('\n💡 Suggestions:'));
-      verificationResult.suggestions.forEach(suggestion => {
-        console.log(chalk.blue(`   - ${suggestion}`));
-      });
-
-      // Ask user what to do with failed verification
-      const retryChoice = await this.handleVerificationFailure();
+      const response = await this.askGemini(executionPrompt);
+      const generatedCode = response;
       
-      if (retryChoice === 'retry') {
-        // Retry with improved prompt
-        const improvedPrompt = `${executionPrompt}
+      console.log(chalk.green('\n📝 Generated code:'));
+      console.log(chalk.gray('═'.repeat(60)));
+      console.log(generatedCode);
+      console.log(chalk.gray('═'.repeat(60)));
+
+      const verificationResult = await this.verifyTaskImplementation(task, generatedCode);
+      
+      if (verificationResult.passed) {
+        console.log(chalk.green(`✅ Task verification passed! Score: ${verificationResult.score}/10`));
+        task.status = 'completed';
+        return true;
+      } else {
+        console.log(chalk.red(`❌ Task verification failed! Score: ${verificationResult.score}/10`));
+        console.log(chalk.yellow('\n⚠️ Issues:'));
+        verificationResult.issues?.forEach(issue => {
+          console.log(chalk.yellow(`   - ${issue}`));
+        });
+        
+        console.log(chalk.blue('\n💡 Suggestions:'));
+        verificationResult.suggestions?.forEach(suggestion => {
+          console.log(chalk.blue(`   - ${suggestion}`));
+        });
+
+        const retryChoice = await this.handleVerificationFailure();
+        
+        if (retryChoice === 'retry') {
+          const improvedPrompt = `${executionPrompt}
 
 PREVIOUS ATTEMPT HAD THESE ISSUES:
-${verificationResult.issues.map(issue => `- ${issue}`).join('\n')}
+${verificationResult.issues?.map(issue => `- ${issue}`).join('\n')}
 
 PLEASE ADDRESS THESE SUGGESTIONS:
-${verificationResult.suggestions.map(suggestion => `- ${suggestion}`).join('\n')}
+${verificationResult.suggestions?.map(suggestion => `- ${suggestion}`).join('\n')}
 
 Generate improved implementation that fixes these issues.
 `;
-        
-        console.log(chalk.blue('\n🔄 Retrying with enhanced prompt...'));
-        const retryResponse = await this.gemini.generateContent(improvedPrompt);
-        const improvedCode = retryResponse.response.text();
-        
-        console.log(chalk.green('\n📝 Improved implementation:'));
-        console.log(chalk.gray('═'.repeat(60)));
-        console.log(improvedCode);
-        console.log(chalk.gray('═'.repeat(60)));
-        
-        // Verify again
-        const retryVerification = await this.verifyTaskImplementation(task, improvedCode);
-        
-        if (retryVerification.passed) {
-          console.log(chalk.green(`🎉 Improved implementation passed! Score: ${retryVerification.score}/10`));
+          console.log(chalk.blue('\n🔄 Retrying with enhanced prompt...'));
+          const retryResponse = await this.askGemini(improvedPrompt);
+          const improvedCode = retryResponse;
+          
+          console.log(chalk.green('\n📝 Improved implementation:'));
+          console.log(chalk.gray('═'.repeat(60)));
+          console.log(improvedCode);
+          console.log(chalk.gray('═'.repeat(60)));
+          
+          const retryVerification = await this.verifyTaskImplementation(task, improvedCode);
+          
+          if (retryVerification.passed) {
+            console.log(chalk.green(`🎉 Improved implementation passed! Score: ${retryVerification.score}/10`));
+            task.status = 'completed';
+            return true;
+          } else {
+            console.log(chalk.yellow(`⚠️ Retry still didn't pass. Score: ${retryVerification.score}/10`));
+          }
+        } else if (retryChoice === 'accept') {
+          console.log(chalk.yellow('⚠️ Accepting implementation despite issues...'));
           task.status = 'completed';
           return true;
-        } else {
-          console.log(chalk.yellow(`⚠️ Retry still didn't pass. Score: ${retryVerification.score}/10`));
+        } else if (retryChoice === 'skip') {
+          console.log(chalk.gray('⏭️ Skipping this task...'));
+          task.status = 'pending';
+          return false;
         }
-      } else if (retryChoice === 'accept') {
-        console.log(chalk.yellow('⚠️ Accepting implementation despite issues...'));
-        task.status = 'completed';
-        return true;
-      } else if (retryChoice === 'skip') {
-        console.log(chalk.gray('⏭️ Skipping this task...'));
-        task.status = 'pending';
+        
+        task.status = 'failed';
         return false;
       }
       
+    } catch (error) {
+      console.error(chalk.red(`❌ Error executing task: ${error}`));
       task.status = 'failed';
       return false;
     }
-    
-  } catch (error) {
-    console.error(chalk.red(`❌ Error executing task: ${error}`));
-    task.status = 'failed';
-    return false;
   }
-}
 
-private async handleVerificationFailure(): Promise<string> {
-  return new Promise((resolve) => {
-    console.log(chalk.cyan('\n🔄 Verification failed. What would you like to do?'));
-    console.log('1. Retry with improved prompt');
-    console.log('2. Accept the code anyway');
-    console.log('3. Skip this task');
-    console.log('4. Manual review (show code again)');
-    
-    const rl = readline.createInterface({
-      input: process.stdin,
-      output: process.stdout
+  private async handleVerificationFailure(): Promise<string> {
+    return new Promise((resolve) => {
+      console.log(chalk.cyan('\n🔄 Verification failed. What would you like to do?'));
+      console.log('1. Retry with improved prompt');
+      console.log('2. Accept the code anyway');
+      console.log('3. Skip this task');
+      console.log('4. Manual review (show code again)');
+      
+      const rl = readline.createInterface({
+        input: process.stdin,
+        output: process.stdout
+      });
+      
+      rl.question(chalk.cyan('Choose action (1-4): '), (answer) => {
+        rl.close();
+        switch (answer.trim()) {
+          case '1':
+            resolve('retry');
+            break;
+          case '2':
+            resolve('accept');
+            break;
+          case '3':
+            resolve('skip');
+            break;
+          case '4':
+            resolve('review');
+            break;
+          default:
+            console.log(chalk.red('Invalid choice, defaulting to retry...'));
+            resolve('retry');
+        }
+      });
     });
-    
-    rl.question(chalk.cyan('Choose action (1-4): '), (answer) => {
-      rl.close();
-      switch (answer.trim()) {
-        case '1':
-          resolve('retry');
-          break;
-        case '2':
-          resolve('accept');
-          break;
-        case '3':
-          resolve('skip');
-          break;
-        case '4':
-          resolve('review');
-          break;
-        default:
-          console.log(chalk.red('Invalid choice, defaulting to retry...'));
-          resolve('retry');
-      }
-    });
-  });
-}
+  }
 
-private async verifyTaskImplementation(task: Task, code: string): Promise<VerificationResult> {
-  const verificationPrompt = `
-You are a senior code reviewer. Analyze this TypeScript implementation against the task requirements.
+  // Refactored method to use JSON structured output
+  private async verifyTaskImplementation(task: Task, code: string): Promise<VerificationResult> {
+    const verificationPrompt = `
+You are a senior code reviewer. Analyze the following TypeScript implementation and provide a review in a structured JSON format.
 
 TASK: ${task.title}
 DESCRIPTION: ${task.description}
-GENERATED CODE:
+
+CODE TO REVIEW:
 ${code}
 
-Rate the implementation on a scale of 1-10 for each criteria and provide specific feedback:
-
-1. Requirements Fulfillment - Does it meet the task requirements?
-2. Code Quality - Is it clean, readable, and well-structured?
-3. Error Handling - Proper try-catch blocks and edge cases?
-4. TypeScript Usage - Proper types, no 'any', good interfaces?
-5. Security - Input validation, XSS protection where needed?
-6. Performance - Efficient algorithms, no obvious bottlenecks?
-7. Maintainability - Comments, SOLID principles, modularity?
-8. Completeness - All parts implemented, no TODOs or placeholders?
-
-Format your response as:
-SCORE: X/10 (overall average)
-PASSED: true/false (pass if score >= 7)
-ISSUES: [list specific problems]
-SUGGESTIONS: [list specific improvements]
-STRENGTHS: [list what was done well]
+Provide your analysis as a single JSON object with the following properties:
+- score (integer): A number from 1-10 rating the implementation quality.
+- passed (boolean): True if the score is 8 or higher, indicating it meets requirements.
+- issues (array of strings): A list of specific problems or bugs found in the code.
+- suggestions (array of strings): A list of suggestions for improvement, following best practices.
+- strengths (array of strings): A list of what the code does well.
+- analysis (string): A comprehensive summary of your review.
 `;
 
-  try {
-    const response = await this.gemini.generateContent(verificationPrompt);
-    const analysis = response.response.text();
-    
-    // Parse the response (simple parsing - you might want to make this more robust)
-    const scoreMatch = analysis.match(/SCORE:\s*(\d+)/);
-    const passedMatch = analysis.match(/PASSED:\s*(true|false)/);
-    const issuesMatch = analysis.match(/ISSUES:\s*\[(.*?)\]/s);
-    const suggestionsMatch = analysis.match(/SUGGESTIONS:\s*\[(.*?)\]/s);
-    const strengthsMatch = analysis.match(/STRENGTHS:\s*\[(.*?)\]/s);
-    
-    return {
-      score: scoreMatch ? parseInt(scoreMatch[1]) : 5,
-      passed: passedMatch ? passedMatch[1] === 'true' : false,
-      issues: issuesMatch ? issuesMatch[1].split(',').map((s:string) => s.trim()) : ['Analysis failed'],
-      suggestions: suggestionsMatch ? suggestionsMatch[1].split(',').map((s:string) => s.trim()) : ['Review code manually'],
-      strengths: strengthsMatch ? strengthsMatch[1].split(',').map((s:string) => s.trim()) : [],
-      analysis: analysis
-    };
-  } catch (error) {
-    console.error(chalk.red(`Error during verification: ${error}`));
-    return {
-      score: 5,
-      passed: false,
-      issues: ['Verification system error'],
-      suggestions: ['Manual review required'],
-      strengths: [],
-      analysis: 'Verification failed'
-    };
-  }
-}
+    const result = await this.askGeminiWithJson<VerificationResult>(verificationPrompt);
 
-// Add this interface near your other type definitions
-
-  private async executePlan(plan: Plan): Promise<void> {
-    console.log(chalk.cyan("\n🚀 Plan approved! Generating handoff materials..."));
-    plan.status = 'executing';
-    
-    // First generate the comprehensive prompt for external AI agents
-    await this.generateHandoffPrompt(plan);
-    
-    // Then ask user if they want internal execution or just the prompt
-    const executeInternally = await this.askExecutionMode();
-    
-    if (executeInternally) {
-      console.log(chalk.yellow("\n🔄 Starting internal execution..."));
-      await this.executeInternally(plan);
-    } else {
-      console.log(chalk.green("\n✅ Handoff materials ready! Use the generated prompt with your preferred AI coding agent."));
+    // Handle case where Gemini fails to return a valid JSON object
+    if (!result) {
+        return {
+            score: 0,
+            passed: false,
+            issues: ["Failed to parse verification result from Gemini."],
+            suggestions: ["Check the Gemini API key and prompt structure."],
+            analysis: "Verification failed due to an internal error."
+        };
     }
-    
-    this.generateHandoffReport(plan);
-  }
 
-  private async askExecutionMode(): Promise<boolean> {
-    return new Promise((resolve) => {
-      console.log(chalk.blue("\n🤖 Execution Options:"));
-      console.log("1. Generate handoff prompt only (recommended)");
-      console.log("2. Also execute internally with basic code generation");
-      console.log(chalk.gray("\nOption 1 gives you a comprehensive prompt to use with"));
-      console.log(chalk.gray("Cursor, Claude Code, Windsurf, or any other AI coding agent."));
-      
-      this.rl.question(chalk.blue("Choose option (1-2): "), (choice) => {
-        resolve(choice.trim() === '2');
-      });
-    });
-  }
-
-  private async generateHandoffPrompt(plan: Plan): Promise<void> {
-    console.log(chalk.yellow("📝 Creating comprehensive prompt for AI coding agents..."));
-    
-    const codebaseContext = await this.analyzeCodebase();
-    
-    const handoffPrompt = this.createHandoffPrompt(plan, codebaseContext);
-    
-    // Save to file
-    const fileName = `traycer-prompt-${plan.id}.md`;
-    try {
-      await fs.writeFile(fileName, handoffPrompt);
-      console.log(chalk.green(`✅ Handoff prompt saved to: ${fileName}`));
-    } catch (error) {
-      console.warn(chalk.yellow("Could not save to file, but prompt is ready to copy."));
-    }
-    
-    // Display the prompt
-    console.log(chalk.cyan("\n" + "=".repeat(80)));
-    console.log(chalk.cyan("🎯 COPY THIS PROMPT FOR YOUR AI CODING AGENT"));
-    console.log(chalk.cyan("=".repeat(80)));
-    console.log(chalk.white(handoffPrompt));
-    console.log(chalk.cyan("=".repeat(80)));
-    
-    console.log(chalk.blue("\n📋 Instructions:"));
-    console.log(chalk.gray("1. Copy the entire prompt above"));
-    console.log(chalk.gray("2. Paste it into your preferred AI coding agent:"));
-    console.log(chalk.gray("   • Cursor: Open composer and paste"));
-    console.log(chalk.gray("   • Claude Code: Use in terminal or chat"));
-    console.log(chalk.gray("   • Windsurf: Paste in the chat interface"));
-    console.log(chalk.gray("   • ChatGPT/Claude: Paste in conversation"));
-    console.log(chalk.gray("3. The AI will have full context to implement your project"));
-    
-    // Wait for user acknowledgment
-    await this.waitForUserAcknowledgment();
-  }
-
-  private createHandoffPrompt(plan: Plan, codebaseContext: string): string {
-    const currentDate = new Date().toLocaleDateString();
-    
-    return `# Project Implementation Request
-
-## Project Overview
-**Project:** ${plan.title}
-**Description:** ${plan.description}
-**Generated:** ${currentDate}
-**Plan ID:** ${plan.id}
-
-## Implementation Requirements
-
-You are an expert software developer tasked with implementing this project. Please follow the detailed plan below and generate clean, production-ready code.
-
-${codebaseContext ? `## Existing Codebase Context
-
-\`\`\`
-${codebaseContext}
-\`\`\`
-
-**Important:** Please analyze the existing code structure and maintain consistency with current patterns, naming conventions, and architecture.
-
-` : ''}## Detailed Implementation Plan
-
-${plan.tasks.map((task, index) => `### Task ${index + 1}: ${task.title}
-
-**Priority:** ${task.priority.toUpperCase()}
-**Estimated Time:** ${task.estimatedTime}
-**Status:** Ready for implementation
-
-**Description:**
-${task.description}
-
-${task.files.length > 0 ? `**Files to Create/Modify:**
-${task.files.map(file => `- ${file}`).join('\n')}
-
-` : ''}${task.dependencies.length > 0 ? `**Dependencies:**
-This task depends on completing: ${task.dependencies.join(', ')}
-
-` : ''}**Implementation Notes:**
-- Ensure code follows TypeScript best practices
-- Include proper error handling and validation
-- Add comprehensive comments for complex logic
-- Write clean, readable, and maintainable code
-- Follow existing project structure and conventions
-
----
-
-`).join('')}## Code Quality Requirements
-
-Please ensure your implementation includes:
-
-### 1. Code Structure
-- Clean, readable TypeScript code
-- Proper separation of concerns
-- Consistent naming conventions
-- Modular architecture
-
-### 2. Error Handling
-- Comprehensive try-catch blocks
-- User-friendly error messages
-- Graceful failure handling
-- Input validation
-
-### 3. Documentation
-- Clear comments explaining complex logic
-- JSDoc comments for functions and classes
-- README updates if needed
-- Type definitions and interfaces
-
-### 4. Best Practices
-- Follow established patterns in the codebase
-- Use appropriate design patterns
-- Implement proper state management
-- Ensure responsive and accessible UI (if applicable)
-
-### 5. Testing Considerations
-- Write testable code with clear interfaces
-- Consider edge cases and error scenarios
-- Include validation for user inputs
-- Test data persistence and retrieval
-
-## Implementation Guidelines
-
-1. **Start with Task 1** and follow the order (respecting dependencies)
-2. **Review existing code** first to understand current patterns
-3. **Create/modify files** as specified in each task
-4. **Test each component** as you build it
-5. **Maintain consistency** with existing code style
-6. **Ask clarifying questions** if any requirements are unclear
-
-## Expected Deliverables
-
-- Complete, working implementation of all tasks
-- Clean, well-documented code
-- Any necessary configuration files
-- Brief explanation of key implementation decisions
-- Instructions for running/testing the code
-
-## Technology Stack
-
-Based on the analysis, please use:
-- **Language:** TypeScript
-- **Runtime:** Node.js
-- **Additional libraries:** As needed for functionality
-- **Existing dependencies:** Maintain compatibility with current setup
-
----
-
-**Note:** This plan was generated by Traycer Lite, an AI planning tool. The implementation should be thorough, production-ready, and follow modern development best practices.
-
-Please proceed with the implementation, starting with Task 1. Feel free to ask questions if you need clarification on any requirements.`;
-  }
-
-  private async waitForUserAcknowledgment(): Promise<void> {
-    return new Promise((resolve) => {
-      this.rl.question(chalk.blue("\nPress Enter when you've copied the prompt... "), () => {
-        resolve();
-      });
-    });
-  }
-
-  private async executeInternally(plan: Plan): Promise<void> {
-    console.log(chalk.yellow("🔄 Note: Internal execution provides basic code generation."));
-    console.log(chalk.yellow("For best results, use the handoff prompt with specialized coding agents.\n"));
-    
-    // Sort tasks by dependencies
-    const sortedTasks = this.topologicalSort(plan.tasks);
-    
-    for (const task of sortedTasks) {
-      console.log(chalk.blue(`\n⚡ Executing: ${task.title}`));
-      task.status = 'in-progress';
-      
-      const success = await this.executeTask(task);
-      
-      if (success) {
-        task.status = 'completed';
-        console.log(chalk.green(`✅ Completed: ${task.title}`));
-      } else {
-        task.status = 'failed';
-        console.log(chalk.red(`❌ Failed: ${task.title}`));
-        
-        const shouldContinue = await this.askContinue();
-        if (!shouldContinue) break;
-      }
-    }
-    
-    const allCompleted = plan.tasks.every(task => task.status === 'completed');
-    plan.status = allCompleted ? 'completed' : 'executing';
-  }
-
-  private topologicalSort(tasks: Task[]): Task[] {
-    const visited = new Set<string>();
-    const visiting = new Set<string>();
-    const result: Task[] = [];
-    const taskMap = new Map(tasks.map(task => [task.id, task]));
-
-    const visit = (taskId: string) => {
-      if (visiting.has(taskId)) {
-        console.warn(chalk.yellow(`Circular dependency detected for task: ${taskId}`));
-        return;
-      }
-      if (visited.has(taskId)) return;
-
-      visiting.add(taskId);
-      const task = taskMap.get(taskId);
-      if (task) {
-        task.dependencies.forEach(depId => visit(depId));
-        visiting.delete(taskId);
-        visited.add(taskId);
-        result.push(task);
-      }
-    };
-
-    tasks.forEach(task => visit(task.id));
     return result;
   }
-
-  private async executeTask(task: Task): Promise<boolean> {
-    // This method is kept for backward compatibility, but now uses the enhanced Gemini execution
-    return await this.executeTaskWithGemini(task);
-  }
-
-  private async askContinue(): Promise<boolean> {
-    return new Promise((resolve) => {
-      this.rl.question(chalk.yellow("Continue with remaining tasks? (y/n): "), (answer) => {
-        resolve(answer.toLowerCase().startsWith('y'));
-      });
-    });
-  }
-
-  private generateHandoffReport(plan: Plan): void {
-    console.log(chalk.cyan("\n📊 TRAYCER LITE HANDOFF REPORT"));
-    console.log(chalk.gray("=".repeat(60)));
-    
-    const completed = plan.tasks.filter(t => t.status === 'completed').length;
-    const total = plan.tasks.length;
-    const failed = plan.tasks.filter(t => t.status === 'failed').length;
-    
-    console.log(`📈 Plan Status: ${plan.status.toUpperCase()}`);
-    console.log(`📋 Tasks: ${completed}/${total} ready for implementation`);
-    if (failed > 0) console.log(chalk.red(`❌ Failed internal executions: ${failed}`));
-    
-    console.log(chalk.blue("\n🎯 Generated Materials:"));
-    console.log(`✅ Comprehensive implementation prompt: traycer-prompt-${plan.id}.md`);
-    console.log(`✅ Structured plan export: traycer-plan-${plan.id}.json`);
-    
-    console.log(chalk.blue("\n🤖 Recommended AI Coding Agents:"));
-    
-    console.log(chalk.cyan("\n1. 🎨 Cursor (Recommended for full projects)"));
-    console.log(chalk.gray("   • Open Cursor in your project directory"));
-    console.log(chalk.gray("   • Open Composer (Ctrl+I or Cmd+I)"));
-    console.log(chalk.gray("   • Paste the generated prompt"));
-    console.log(chalk.gray("   • Cursor will implement with full codebase context"));
-    
-    console.log(chalk.cyan("\n2. ⚡ Claude Code (Recommended for terminal-based workflow)"));
-    console.log(chalk.gray("   • Run: claude-code chat"));
-    console.log(chalk.gray("   • Paste the generated prompt"));
-    console.log(chalk.gray("   • Claude Code will create and modify files directly"));
-    
-    console.log(chalk.cyan("\n3. 🏄 Windsurf (Recommended for complex web projects)"));
-    console.log(chalk.gray("   • Open Windsurf in your project"));
-    console.log(chalk.gray("   • Use the chat interface"));
-    console.log(chalk.gray("   • Paste the prompt for guided implementation"));
-    
-    console.log(chalk.cyan("\n4. 💬 ChatGPT/Claude/Gemini (Manual implementation)"));
-    console.log(chalk.gray("   • Paste the prompt in the chat"));
-    console.log(chalk.gray("   • Copy generated code to your files"));
-    console.log(chalk.gray("   • Best for smaller tasks or learning"));
-    
-    console.log(chalk.blue("\n🔄 Next Steps:"));
-    console.log(chalk.white("1. Choose your preferred AI coding agent"));
-    console.log(chalk.white("2. Copy the generated prompt from above or the .md file"));
-    console.log(chalk.white("3. Paste it into your chosen agent"));
-    console.log(chalk.white("4. Review and test the generated code"));
-    console.log(chalk.white("5. Iterate if needed using the detailed task breakdown"));
-    
-    console.log(chalk.blue("\n💡 Pro Tips:"));
-    console.log(chalk.gray("• The prompt includes your existing codebase context"));
-    console.log(chalk.gray("• Each task has clear requirements and file specifications"));
-    console.log(chalk.gray("• Dependencies are clearly marked for proper ordering"));
-    console.log(chalk.gray("• You can implement tasks individually if preferred"));
-    console.log(chalk.gray("• Save the .md file for future reference"));
-    
-    if (plan.status === 'completed') {
-      console.log(chalk.green("\n✨ All planning complete! Your project is ready for AI implementation."));
-    } else {
-      console.log(chalk.yellow("\n⏳ Plan ready for handoff. Use the comprehensive prompt for best results."));
-    }
-    
-    console.log(chalk.blue("\n📁 Files Generated:"));
-    console.log(chalk.gray(`   📄 traycer-prompt-${plan.id}.md - Complete implementation prompt`));
-    console.log(chalk.gray(`   📋 traycer-plan-${plan.id}.json - Structured plan data`));
-    
-    console.log(chalk.cyan("\n🎉 Thank you for using Traycer Lite!"));
-    console.log(chalk.gray("Your detailed plan is ready for seamless AI handoff."));
-    console.log(chalk.gray("=".repeat(60)));
-  }
-
+  
   public async run(): Promise<void> {
-    console.log(chalk.cyan.bold("🎯 Traycer Lite - AI Planning Layer for Coding Agents"));
-    console.log(chalk.gray("Creating detailed, actionable plans for seamless AI handoff\n"));
-    
     try {
+      console.log(chalk.blue("--- 🤖 Traycer AI Software Agent ---"));
+      console.log(chalk.blue("A generative AI tool for code project planning and execution."));
+      
       const requirements = await this.gatherRequirements();
-      if (!requirements) {
-        console.log(chalk.yellow("⚠️ No requirements provided. Exiting."));
-        return;
-      }
       
       console.log(chalk.blue("\n🧠 Creating comprehensive plan..."));
       const plan = await this.createPlan(requirements);
       this.currentPlan = plan;
       
       const approvedPlan = await this.reviewAndIteratePlan(plan);
-      await this.executePlan(approvedPlan);
+      // Execution is now handled within the reviewAndIteratePlan method
       
     } catch (error) {
       console.error(chalk.red("An error occurred:"), error);
