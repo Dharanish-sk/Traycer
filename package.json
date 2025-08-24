@@ -17,6 +17,7 @@
     "@google/generative-ai": "^0.24.1",
     "chalk": "^5.6.0",
     "dotenv": "^17.2.1",
+    "marker": "^0.1.2",
     "readline-sync": "^1.4.10"
   },
   "devDependencies": {

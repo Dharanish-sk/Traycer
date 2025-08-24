@@ -6,7 +6,7 @@ import path from "path";
 import chalk from "chalk";
 
 dotenv.config();
- 
+
 interface Task {
   id: string;
   title: string;
@@ -70,7 +70,6 @@ class TracerLite {
     }
   }
 
-  // New method to ask Gemini for a JSON-formatted response
   private async askGeminiWithJson<T>(prompt: string): Promise<T | null> {
     try {
       const model = this.genAI.getGenerativeModel({
@@ -748,6 +747,7 @@ Return a JSON object with this structure:
 
     console.log(chalk.green(`\n🎉 Plan execution completed successfully!`));
     plan.status = 'completed';
+    await this.saveOutputToFile(plan);
   }
 
   private async executeTaskWithGemini(task: Task): Promise<boolean> {
@@ -886,7 +886,6 @@ Generate improved implementation that fixes these issues.
     });
   }
 
-  // Refactored method to use JSON structured output
   private async verifyTaskImplementation(task: Task, code: string): Promise<VerificationResult> {
     const verificationPrompt = `
 You are a senior code reviewer. Analyze the following TypeScript implementation and provide a review in a structured JSON format.
@@ -908,7 +907,6 @@ Provide your analysis as a single JSON object with the following properties:
 
     const result = await this.askGeminiWithJson<VerificationResult>(verificationPrompt);
 
-    // Handle case where Gemini fails to return a valid JSON object
     if (!result) {
         return {
             score: 0,
@@ -922,6 +920,46 @@ Provide your analysis as a single JSON object with the following properties:
     return result;
   }
   
+  // New method to save the plan's output to a file
+  private async saveOutputToFile(plan: Plan): Promise<void> {
+    try {
+      // Get the current working directory from which the script was executed
+      const currentWorkingDirectory = process.cwd();
+      const outputFileName = `traycer-output-${plan.id}.txt`;
+      const outputPath = path.join(currentWorkingDirectory, outputFileName);
+
+      let content = `
+========================================
+    Traycer AI Execution Summary
+========================================
+
+Project: ${plan.title}
+Status: ${plan.status}
+Date: ${new Date().toLocaleString()}
+
+----------------------------------------
+Tasks Executed:
+----------------------------------------
+`;
+      
+      plan.tasks.forEach((task, index) => {
+        content += `
+  [${index + 1}] Task: ${task.title}
+  Status: ${task.status}
+  Description: ${task.description}
+  ----------------------------------------
+`;
+      });
+      
+      // Use fs.promises.writeFile to write the string content to the file
+      await fs.writeFile(outputPath, content);
+      
+      console.log(chalk.green(`\n✅ Program output saved to: ${outputPath}`));
+    } catch (error) {
+      console.error(chalk.red(`\n❌ Failed to save output file: ${error}`));
+    }
+  }
+
   public async run(): Promise<void> {
     try {
       console.log(chalk.blue("--- 🤖 Traycer AI Software Agent ---"));
