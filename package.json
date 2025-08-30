@@ -1,30 +1,42 @@
 {
-  "name": "traycer",
+  "name": "tracer-lite",
   "version": "1.0.0",
-  "description": "",
-  "main": "index.js",
-  "directories": {
-    "test": "test"
+  "description": "A generative AI tool for code project planning and execution",
+  "main": "dist/index.js",
+  "bin": {
+    "tracer-lite": "dist/index.js"
   },
   "scripts": {
-    "start": "ts-node src/index.ts"
+    "build": "tsc",
+    "start": "ts-node src/index.ts",
+    "dev": "ts-node src/index.ts",
+    "clean": "rimraf dist",
+    "prepublishOnly": "npm run clean && npm run build"
   },
-  "keywords": [],
-  "author": "",
-  "license": "ISC",
-  "type": "commonjs",
+  "keywords": [
+
+    "ai",
+    "planning",
+    "code-generation",
+    "automation",
+    "gemini"
+  ],
+  "author": "Your Name",
+  "license": "MIT",
   "dependencies": {
-    "@google/generative-ai": "^0.24.1",
-    "chalk": "^5.6.0",
-    "dotenv": "^17.2.1",
-    "marker": "^0.1.2",
-    "readline-sync": "^1.4.10"
+    "@google/generative-ai": "^0.7.0",
+    "chalk": "^4.1.2",
+    "dotenv": "^16.3.1"
   },
   "devDependencies": {
-    "@types/chalk": "^0.4.31",
-    "@types/node": "^24.3.0",
-    "@types/readline-sync": "^1.4.8",
-    "ts-node": "^10.9.2",
-    "typescript": "^5.9.2"
-  }
+    "@types/node": "^20.5.0",
+    "rimraf": "^5.0.1",
+    "ts-node": "^10.9.1",
+    "typescript": "^5.1.6"
+  },
+  "files": [
+    "dist/**/*",
+    "README.md",
+    "LICENSE"
+  ]
 }
